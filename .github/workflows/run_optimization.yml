@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
 
   optimize-network:
@@ -15,6 +18,9 @@ jobs:
 
     - name: Checkout Repository
       uses: actions/checkout@v4
+      with:
+        persist-credentials: true
+        fetch-depth: 0
 
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -33,14 +39,16 @@ jobs:
       run: |
         python main.py
 
-    - name: Upload Excel Output
-      uses: actions/upload-artifact@v4
-      with:
-        name: optimized_mapping
-        path: output/optimized_mapping.xlsx
+    - name: Commit Output Files
+      run: |
 
-    - name: Upload HTML Map
-      uses: actions/upload-artifact@v4
-      with:
-        name: optimized_network_map
-        path: output/optimized_network_map.html
+        git config --global user.name "github-actions"
+        git config --global user.email "github-actions@github.com"
+
+        git add output/*
+
+        git status
+
+        git commit -m "Auto-generated optimization outputs" || echo "No changes to commit"
+
+        git push
