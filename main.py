@@ -1,9 +1,9 @@
 # ==========================================================
-# SCC/DC EXISTING NETWORK OPTIMIZATION ENGINE
+# SCC/DC NETWORK OPTIMIZATION ENGINE
+# FINAL STABLE VERSION
 # ==========================================================
 
 import pandas as pd
-import numpy as np
 import requests
 import folium
 
@@ -15,9 +15,11 @@ from tqdm import tqdm
 # ==========================================================
 
 STORES_FILE = "network.xlsx"
+
 DCS_FILE = "SCC_DC_coordinates.xlsx"
 
 OUTPUT_EXCEL = "output/optimized_mapping.xlsx"
+
 OUTPUT_MAP = "output/optimized_network_map.html"
 
 # ==========================================================
@@ -27,6 +29,7 @@ OUTPUT_MAP = "output/optimized_network_map.html"
 print("\nLoading files...\n")
 
 stores = pd.read_excel(STORES_FILE)
+
 dcs = pd.read_excel(DCS_FILE)
 
 print("Files loaded successfully.\n")
@@ -36,13 +39,8 @@ print("Files loaded successfully.\n")
 # ==========================================================
 
 stores.columns = stores.columns.str.strip()
+
 dcs.columns = dcs.columns.str.strip()
-
-print("\nSTORE FILE COLUMNS:")
-print(stores.columns.tolist())
-
-print("\nDC FILE COLUMNS:")
-print(dcs.columns.tolist())
 
 # ==========================================================
 # COLUMN NAMES
@@ -61,24 +59,6 @@ DC_NAME_COL = "SCC/DC"
 DC_LAT_COL = "Latitude"
 
 DC_LON_COL = "Longitude"
-
-# ==========================================================
-# REMOVE BLANK ROWS
-# ==========================================================
-
-stores = stores.dropna(
-    subset=[
-        STORE_LAT_COL,
-        STORE_LON_COL
-    ]
-)
-
-dcs = dcs.dropna(
-    subset=[
-        DC_LAT_COL,
-        DC_LON_COL
-    ]
-)
 
 # ==========================================================
 # CONVERT TO NUMERIC
@@ -105,21 +85,41 @@ dcs[DC_LON_COL] = pd.to_numeric(
 )
 
 # ==========================================================
-# REMOVE INVALID COORDINATES
+# REMOVE INVALID ROWS
 # ==========================================================
 
 stores = stores.dropna(
     subset=[
         STORE_LAT_COL,
-        STORE_LON_COL
+        STORE_LON_COL,
+        CURRENT_DC_COL
     ]
 )
 
 dcs = dcs.dropna(
     subset=[
         DC_LAT_COL,
-        DC_LON_COL
+        DC_LON_COL,
+        DC_NAME_COL
     ]
+)
+
+# ==========================================================
+# CLEAN DC NAMES
+# ==========================================================
+
+stores["DC_CLEAN"] = (
+    stores[CURRENT_DC_COL]
+    .astype(str)
+    .str.strip()
+    .str.upper()
+)
+
+dcs["DC_CLEAN"] = (
+    dcs[DC_NAME_COL]
+    .astype(str)
+    .str.strip()
+    .str.upper()
 )
 
 # ==========================================================
@@ -152,6 +152,7 @@ def osrm_distance(lat1, lon1, lat2, lon2):
         data = response.json()
 
         if "routes" not in data:
+
             return None
 
         distance_km = (
@@ -189,31 +190,32 @@ for _, store in tqdm(
 
         s_lon = store[STORE_LON_COL]
 
-        current_dc = str(
-            store[CURRENT_DC_COL]
-        ).strip()
+        current_dc = store["DC_CLEAN"]
 
         # --------------------------------------------------
         # CURRENT DC LOOKUP
         # --------------------------------------------------
 
         current_dc_row = dcs[
-            dcs[DC_NAME_COL].astype(str).str.strip()
-            == current_dc
+            dcs["DC_CLEAN"] == current_dc
         ]
 
         if len(current_dc_row) == 0:
 
             print(
                 f"Skipping Store {store_id} "
-                f"- DC not found"
+                f"- DC not found: {current_dc}"
             )
 
             continue
 
-        current_lat = current_dc_row.iloc[0][DC_LAT_COL]
+        current_lat = (
+            current_dc_row.iloc[0][DC_LAT_COL]
+        )
 
-        current_lon = current_dc_row.iloc[0][DC_LON_COL]
+        current_lon = (
+            current_dc_row.iloc[0][DC_LON_COL]
+        )
 
         # --------------------------------------------------
         # CURRENT DISTANCE
@@ -238,7 +240,7 @@ for _, store in tqdm(
             )
 
         # --------------------------------------------------
-        # FIND BEST DC
+        # FIND OPTIMAL DC
         # --------------------------------------------------
 
         best_dc = None
@@ -267,14 +269,14 @@ for _, store in tqdm(
             # fallback
             if road_distance is None:
 
-                air_distance = haversine_distance(
-                    s_lat,
-                    s_lon,
-                    d_lat,
-                    d_lon
+                road_distance = (
+                    haversine_distance(
+                        s_lat,
+                        s_lon,
+                        d_lat,
+                        d_lon
+                    ) * 1.25
                 )
-
-                road_distance = air_distance * 1.25
 
             # ----------------------------------------------
             # BEST DC
@@ -311,7 +313,7 @@ for _, store in tqdm(
         )
 
         # --------------------------------------------------
-        # SAVE RESULT
+        # SAVE RESULTS
         # --------------------------------------------------
 
         results.append({
@@ -344,7 +346,7 @@ for _, store in tqdm(
     except Exception as e:
 
         print(
-            f"Error processing store "
+            f"Error processing "
             f"{store_id}: {e}"
         )
 
@@ -354,11 +356,12 @@ for _, store in tqdm(
 
 results_df = pd.DataFrame(results)
 
-print("\nRESULT DATAFRAME COLUMNS:")
-print(results_df.columns.tolist())
+print("\nTotal Results Generated:")
+
+print(len(results_df))
 
 # ==========================================================
-# SAVE EXCEL
+# SAVE EXCEL OUTPUT
 # ==========================================================
 
 results_df.to_excel(
@@ -387,7 +390,7 @@ m = folium.Map(
 )
 
 # ==========================================================
-# DC MARKERS
+# SCC/DC MARKERS
 # ==========================================================
 
 for _, dc in dcs.iterrows():
@@ -399,10 +402,13 @@ for _, dc in dcs.iterrows():
             dc[DC_LON_COL]
         ],
 
-        popup=f"SCC/DC: {dc[DC_NAME_COL]}",
+        popup=f"""
+        SCC/DC: {dc[DC_NAME_COL]}
+        """,
 
         icon=folium.Icon(
-            color="red"
+            color="red",
+            icon="industry"
         )
 
     ).add_to(m)
@@ -432,6 +438,10 @@ for _, row in results_df.iterrows():
         d_lat = optimal_dc_row[DC_LAT_COL]
 
         d_lon = optimal_dc_row[DC_LON_COL]
+
+        # --------------------------------------------------
+        # COLOR LOGIC
+        # --------------------------------------------------
 
         color = (
             "red"
@@ -494,7 +504,7 @@ for _, row in results_df.iterrows():
     except Exception as e:
 
         print(
-            f"Map error for store "
+            f"Map error for "
             f"{row['Store']}: {e}"
         )
 
@@ -536,15 +546,11 @@ if len(results_df) > 0:
         ]
     )
 
-    # ======================================================
-    # PRINT KPI SUMMARY
-    # ======================================================
-
-    print("\n===================================")
+    print("\n================================")
 
     print("NETWORK OPTIMIZATION SUMMARY")
 
-    print("===================================\n")
+    print("================================\n")
 
     print(
         f"Total Current Distance : "
@@ -566,7 +572,7 @@ if len(results_df) > 0:
         f"{stores_remap}"
     )
 
-    print("\n===================================\n")
+    print("\n================================\n")
 
 else:
 
