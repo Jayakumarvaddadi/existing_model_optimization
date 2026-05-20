@@ -1,0 +1,46 @@
+name: SCC Optimization Workflow
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+
+  optimize-network:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install Dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Create Output Folder
+      run: |
+        mkdir -p output
+
+    - name: Run Optimization
+      run: |
+        python main.py
+
+    - name: Upload Excel Output
+      uses: actions/upload-artifact@v4
+      with:
+        name: optimized_mapping
+        path: output/optimized_mapping.xlsx
+
+    - name: Upload HTML Map
+      uses: actions/upload-artifact@v4
+      with:
+        name: optimized_network_map
+        path: output/optimized_network_map.html
