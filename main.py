@@ -32,8 +32,20 @@ dcs = pd.read_excel(DCS_FILE)
 print("Files loaded successfully.\n")
 
 # ==========================================================
+# CLEAN COLUMN NAMES
+# ==========================================================
+
+stores.columns = stores.columns.str.strip()
+dcs.columns = dcs.columns.str.strip()
+
+print("\nSTORE FILE COLUMNS:")
+print(stores.columns.tolist())
+
+print("\nDC FILE COLUMNS:")
+print(dcs.columns.tolist())
+
+# ==========================================================
 # COLUMN NAMES
-# MODIFY ONLY IF COLUMN NAMES DIFFER
 # ==========================================================
 
 STORE_ID_COL = "STORE"
@@ -49,15 +61,51 @@ DC_NAME_COL = "SCC/DC"
 DC_LAT_COL = "Latitude"
 
 DC_LON_COL = "Longitude"
-# ==========================================================
-# CLEAN COLUMN NAMES
-# ==========================================================
-
-stores.columns = stores.columns.str.strip()
-dcs.columns = dcs.columns.str.strip()
 
 # ==========================================================
 # REMOVE BLANK ROWS
+# ==========================================================
+
+stores = stores.dropna(
+    subset=[
+        STORE_LAT_COL,
+        STORE_LON_COL
+    ]
+)
+
+dcs = dcs.dropna(
+    subset=[
+        DC_LAT_COL,
+        DC_LON_COL
+    ]
+)
+
+# ==========================================================
+# CONVERT TO NUMERIC
+# ==========================================================
+
+stores[STORE_LAT_COL] = pd.to_numeric(
+    stores[STORE_LAT_COL],
+    errors="coerce"
+)
+
+stores[STORE_LON_COL] = pd.to_numeric(
+    stores[STORE_LON_COL],
+    errors="coerce"
+)
+
+dcs[DC_LAT_COL] = pd.to_numeric(
+    dcs[DC_LAT_COL],
+    errors="coerce"
+)
+
+dcs[DC_LON_COL] = pd.to_numeric(
+    dcs[DC_LON_COL],
+    errors="coerce"
+)
+
+# ==========================================================
+# REMOVE INVALID COORDINATES
 # ==========================================================
 
 stores = stores.dropna(
@@ -96,9 +144,15 @@ def osrm_distance(lat1, lon1, lat2, lon2):
             f"?overview=false"
         )
 
-        response = requests.get(url, timeout=20)
+        response = requests.get(
+            url,
+            timeout=20
+        )
 
         data = response.json()
+
+        if "routes" not in data:
+            return None
 
         distance_km = (
             data["routes"][0]["distance"] / 1000
@@ -123,160 +177,176 @@ for _, store in tqdm(
     total=len(stores)
 ):
 
-    # ------------------------------------------------------
-    # STORE DETAILS
-    # ------------------------------------------------------
+    try:
 
-    store_id = store[STORE_ID_COL]
+        # --------------------------------------------------
+        # STORE DETAILS
+        # --------------------------------------------------
 
-    s_lat = store[STORE_LAT_COL]
+        store_id = store[STORE_ID_COL]
 
-    s_lon = store[STORE_LON_COL]
+        s_lat = store[STORE_LAT_COL]
 
-    current_dc = store[CURRENT_DC_COL]
+        s_lon = store[STORE_LON_COL]
 
-    # ------------------------------------------------------
-    # CURRENT SCC/DC DISTANCE
-    # ------------------------------------------------------
+        current_dc = str(
+            store[CURRENT_DC_COL]
+        ).strip()
 
-    current_dc_row = dcs[
-        dcs[DC_NAME_COL] == current_dc
-    ]
+        # --------------------------------------------------
+        # CURRENT DC LOOKUP
+        # --------------------------------------------------
 
-    if len(current_dc_row) == 0:
+        current_dc_row = dcs[
+            dcs[DC_NAME_COL].astype(str).str.strip()
+            == current_dc
+        ]
 
-        continue
+        if len(current_dc_row) == 0:
 
-    current_lat = current_dc_row.iloc[0][DC_LAT_COL]
+            print(
+                f"Skipping Store {store_id} "
+                f"- DC not found"
+            )
 
-    current_lon = current_dc_row.iloc[0][DC_LON_COL]
+            continue
 
-    current_distance = osrm_distance(
-        s_lat,
-        s_lon,
-        current_lat,
-        current_lon
-    )
+        current_lat = current_dc_row.iloc[0][DC_LAT_COL]
 
-    # fallback
-    if current_distance is None:
+        current_lon = current_dc_row.iloc[0][DC_LON_COL]
 
-        current_distance = (
-            haversine_distance(
+        # --------------------------------------------------
+        # CURRENT DISTANCE
+        # --------------------------------------------------
+
+        current_distance = osrm_distance(
+            s_lat,
+            s_lon,
+            current_lat,
+            current_lon
+        )
+
+        if current_distance is None:
+
+            current_distance = (
+                haversine_distance(
+                    s_lat,
+                    s_lon,
+                    current_lat,
+                    current_lon
+                ) * 1.25
+            )
+
+        # --------------------------------------------------
+        # FIND BEST DC
+        # --------------------------------------------------
+
+        best_dc = None
+
+        best_distance = 999999
+
+        for _, dc in dcs.iterrows():
+
+            dc_name = dc[DC_NAME_COL]
+
+            d_lat = dc[DC_LAT_COL]
+
+            d_lon = dc[DC_LON_COL]
+
+            # ----------------------------------------------
+            # ROAD DISTANCE
+            # ----------------------------------------------
+
+            road_distance = osrm_distance(
                 s_lat,
                 s_lon,
-                current_lat,
-                current_lon
-            ) * 1.25
+                d_lat,
+                d_lon
+            )
+
+            # fallback
+            if road_distance is None:
+
+                air_distance = haversine_distance(
+                    s_lat,
+                    s_lon,
+                    d_lat,
+                    d_lon
+                )
+
+                road_distance = air_distance * 1.25
+
+            # ----------------------------------------------
+            # BEST DC
+            # ----------------------------------------------
+
+            if road_distance < best_distance:
+
+                best_distance = road_distance
+
+                best_dc = dc_name
+
+        # --------------------------------------------------
+        # SAVINGS
+        # --------------------------------------------------
+
+        savings = (
+            current_distance - best_distance
         )
 
-    # ------------------------------------------------------
-    # CHECK ALL AVAILABLE SCC/DCs
-    # ------------------------------------------------------
-
-    best_dc = None
-
-    best_distance = 999999
-
-    for _, dc in dcs.iterrows():
-
-        dc_name = dc[DC_NAME_COL]
-
-        d_lat = dc[DC_LAT_COL]
-
-        d_lon = dc[DC_LON_COL]
-
-        # ----------------------------------------------
-        # FAST AIR DISTANCE SCREENING
-        # ----------------------------------------------
-
-        air_distance = haversine_distance(
-            s_lat,
-            s_lon,
-            d_lat,
-            d_lon
+        savings_percent = (
+            (savings / current_distance) * 100
+            if current_distance != 0
+            else 0
         )
 
-        # ----------------------------------------------
-        # ROAD DISTANCE
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # REMAP LOGIC
+        # --------------------------------------------------
 
-        road_distance = osrm_distance(
-            s_lat,
-            s_lon,
-            d_lat,
-            d_lon
+        remap = (
+            "YES"
+            if savings > 75
+            else "NO"
         )
 
-        # fallback
-        if road_distance is None:
+        # --------------------------------------------------
+        # SAVE RESULT
+        # --------------------------------------------------
 
-            road_distance = air_distance * 1.25
+        results.append({
 
-        # ----------------------------------------------
-        # FIND BEST SCC/DC
-        # ----------------------------------------------
+            "Store":
+                store_id,
 
-        if road_distance < best_distance:
+            "Current_DC":
+                current_dc,
 
-            best_distance = road_distance
+            "Current_Distance_km":
+                round(current_distance, 2),
 
-            best_dc = dc_name
+            "Optimal_DC":
+                best_dc,
 
-    # ------------------------------------------------------
-    # SAVINGS CALCULATION
-    # ------------------------------------------------------
+            "Optimal_Distance_km":
+                round(best_distance, 2),
 
-    savings = (
-        current_distance - best_distance
-    )
+            "Savings_km":
+                round(savings, 2),
 
-    savings_percent = (
-        (savings / current_distance) * 100
-        if current_distance != 0
-        else 0
-    )
+            "Savings_Percent":
+                round(savings_percent, 2),
 
-    # ------------------------------------------------------
-    # REMAP LOGIC
-    # ------------------------------------------------------
+            "Remap_Required":
+                remap
+        })
 
-    if savings > 75:
+    except Exception as e:
 
-        remap = "YES"
-
-    else:
-
-        remap = "NO"
-
-    # ------------------------------------------------------
-    # STORE RESULTS
-    # ------------------------------------------------------
-
-    results.append({
-
-        "Store": store_id,
-
-        "Current_DC": current_dc,
-
-        "Current_Distance_km":
-            round(current_distance, 2),
-
-        "Optimal_DC":
-            best_dc,
-
-        "Optimal_Distance_km":
-            round(best_distance, 2),
-
-        "Savings_km":
-            round(savings, 2),
-
-        "Savings_Percent":
-            round(savings_percent, 2),
-
-        "Remap_Required":
-            remap
-    })
+        print(
+            f"Error processing store "
+            f"{store_id}: {e}"
+        )
 
 # ==========================================================
 # RESULTS DATAFRAME
@@ -284,8 +354,11 @@ for _, store in tqdm(
 
 results_df = pd.DataFrame(results)
 
+print("\nRESULT DATAFRAME COLUMNS:")
+print(results_df.columns.tolist())
+
 # ==========================================================
-# SAVE EXCEL OUTPUT
+# SAVE EXCEL
 # ==========================================================
 
 results_df.to_excel(
@@ -296,7 +369,7 @@ results_df.to_excel(
 print("\nExcel output generated.\n")
 
 # ==========================================================
-# CREATE INTERACTIVE MAP
+# GENERATE MAP
 # ==========================================================
 
 print("\nGenerating interactive map...\n")
@@ -306,17 +379,15 @@ center_lat = stores[STORE_LAT_COL].mean()
 center_lon = stores[STORE_LON_COL].mean()
 
 m = folium.Map(
-
     location=[
         center_lat,
         center_lon
     ],
-
     zoom_start=5
 )
 
 # ==========================================================
-# SCC/DC MARKERS
+# DC MARKERS
 # ==========================================================
 
 for _, dc in dcs.iterrows():
@@ -328,13 +399,10 @@ for _, dc in dcs.iterrows():
             dc[DC_LON_COL]
         ],
 
-        popup=f"""
-        SCC/DC: {dc[DC_NAME_COL]}
-        """,
+        popup=f"SCC/DC: {dc[DC_NAME_COL]}",
 
         icon=folium.Icon(
-            color="red",
-            icon="industry"
+            color="red"
         )
 
     ).add_to(m)
@@ -345,86 +413,90 @@ for _, dc in dcs.iterrows():
 
 for _, row in results_df.iterrows():
 
-    store_row = stores[
-        stores[STORE_ID_COL] == row["Store"]
-    ].iloc[0]
+    try:
 
-    s_lat = store_row[STORE_LAT_COL]
+        store_row = stores[
+            stores[STORE_ID_COL]
+            == row["Store"]
+        ].iloc[0]
 
-    s_lon = store_row[STORE_LON_COL]
+        s_lat = store_row[STORE_LAT_COL]
 
-    optimal_dc_row = dcs[
-        dcs[DC_NAME_COL]
-        == row["Optimal_DC"]
-    ].iloc[0]
+        s_lon = store_row[STORE_LON_COL]
 
-    d_lat = optimal_dc_row[DC_LAT_COL]
+        optimal_dc_row = dcs[
+            dcs[DC_NAME_COL]
+            == row["Optimal_DC"]
+        ].iloc[0]
 
-    d_lon = optimal_dc_row[DC_LON_COL]
+        d_lat = optimal_dc_row[DC_LAT_COL]
 
-    # ------------------------------------------------------
-    # COLOR LOGIC
-    # ------------------------------------------------------
+        d_lon = optimal_dc_row[DC_LON_COL]
 
-    if row["Remap_Required"] == "YES":
+        color = (
+            "red"
+            if row["Remap_Required"] == "YES"
+            else "blue"
+        )
 
-        color = "red"
+        # --------------------------------------------------
+        # STORE MARKER
+        # --------------------------------------------------
 
-    else:
+        folium.CircleMarker(
 
-        color = "blue"
+            location=[
+                s_lat,
+                s_lon
+            ],
 
-    # ------------------------------------------------------
-    # STORE POINT
-    # ------------------------------------------------------
+            radius=4,
 
-    folium.CircleMarker(
+            color=color,
 
-        location=[
-            s_lat,
-            s_lon
-        ],
+            fill=True,
 
-        radius=4,
+            fill_opacity=0.7,
 
-        color=color,
+            popup=f"""
+            <b>Store:</b> {row['Store']}<br>
+            <b>Current DC:</b> {row['Current_DC']}<br>
+            <b>Optimal DC:</b> {row['Optimal_DC']}<br>
+            <b>Current Distance:</b>
+            {row['Current_Distance_km']} km<br>
+            <b>Optimal Distance:</b>
+            {row['Optimal_Distance_km']} km<br>
+            <b>Savings:</b>
+            {row['Savings_km']} km
+            """
 
-        fill=True,
+        ).add_to(m)
 
-        fill_opacity=0.7,
+        # --------------------------------------------------
+        # CONNECTION LINE
+        # --------------------------------------------------
 
-        popup=f"""
-        <b>Store:</b> {row['Store']}<br>
-        <b>Current DC:</b> {row['Current_DC']}<br>
-        <b>Optimal DC:</b> {row['Optimal_DC']}<br>
-        <b>Current Distance:</b>
-        {row['Current_Distance_km']} km<br>
-        <b>Optimal Distance:</b>
-        {row['Optimal_Distance_km']} km<br>
-        <b>Savings:</b>
-        {row['Savings_km']} km
-        """
+        folium.PolyLine(
 
-    ).add_to(m)
+            locations=[
+                [s_lat, s_lon],
+                [d_lat, d_lon]
+            ],
 
-    # ------------------------------------------------------
-    # CONNECTION LINE
-    # ------------------------------------------------------
+            color="green",
 
-    folium.PolyLine(
+            weight=1,
 
-        locations=[
-            [s_lat, s_lon],
-            [d_lat, d_lon]
-        ],
+            opacity=0.5
 
-        color="green",
+        ).add_to(m)
 
-        weight=1,
+    except Exception as e:
 
-        opacity=0.5
-
-    ).add_to(m)
+        print(
+            f"Map error for store "
+            f"{row['Store']}: {e}"
+        )
 
 # ==========================================================
 # SAVE MAP
@@ -438,59 +510,68 @@ print("\nInteractive map generated.\n")
 # KPI SUMMARY
 # ==========================================================
 
-total_current = (
-    results_df[
-        "Current_Distance_km"
-    ].sum()
-)
+if len(results_df) > 0:
 
-total_optimized = (
-    results_df[
-        "Optimal_Distance_km"
-    ].sum()
-)
+    total_current = (
+        results_df[
+            "Current_Distance_km"
+        ].sum()
+    )
 
-total_savings = (
-    total_current - total_optimized
-)
+    total_optimized = (
+        results_df[
+            "Optimal_Distance_km"
+        ].sum()
+    )
 
-stores_remap = len(
+    total_savings = (
+        total_current - total_optimized
+    )
 
-    results_df[
-        results_df["Remap_Required"] == "YES"
-    ]
-)
+    stores_remap = len(
 
-# ==========================================================
-# PRINT KPI SUMMARY
-# ==========================================================
+        results_df[
+            results_df["Remap_Required"]
+            == "YES"
+        ]
+    )
 
-print("\n========================================")
+    # ======================================================
+    # PRINT KPI SUMMARY
+    # ======================================================
 
-print("NETWORK OPTIMIZATION SUMMARY")
+    print("\n===================================")
 
-print("========================================\n")
+    print("NETWORK OPTIMIZATION SUMMARY")
 
-print(
-    f"Total Current Distance : "
-    f"{round(total_current,2)} km"
-)
+    print("===================================\n")
 
-print(
-    f"Total Optimized Distance : "
-    f"{round(total_optimized,2)} km"
-)
+    print(
+        f"Total Current Distance : "
+        f"{round(total_current,2)} km"
+    )
 
-print(
-    f"Total Savings : "
-    f"{round(total_savings,2)} km"
-)
+    print(
+        f"Total Optimized Distance : "
+        f"{round(total_optimized,2)} km"
+    )
 
-print(
-    f"Stores Suggested For Remap : "
-    f"{stores_remap}"
-)
+    print(
+        f"Total Savings : "
+        f"{round(total_savings,2)} km"
+    )
 
-print("\n========================================\n")
+    print(
+        f"Stores Suggested For Remap : "
+        f"{stores_remap}"
+    )
+
+    print("\n===================================\n")
+
+else:
+
+    print(
+        "\nNo optimization results generated.\n"
+    )
 
 print("PROCESS COMPLETED SUCCESSFULLY.\n")
