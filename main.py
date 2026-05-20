@@ -46,10 +46,9 @@ CURRENT_DC_COL = "SERVING_SCC/DC"
 
 DC_NAME_COL = "SCC/DC"
 
-DC_LAT_COL = "SCC_LAT"
+DC_LAT_COL = "Latitude"
 
-DC_LON_COL = "SCC_LONG"
-
+DC_LON_COL = "Longitude"
 # ==========================================================
 # CLEAN COLUMN NAMES
 # ==========================================================
