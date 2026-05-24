@@ -20,7 +20,7 @@ DCS_FILE = "SCC_DC_coordinates.xlsx"
 
 OUTPUT_EXCEL = "output/optimized_mapping.xlsx"
 
-OUTPUT_MAP = "output/optimized_network_map.html"
+OUTPUT_MAP = "optimized_network_map.html"
 
 # ==========================================================
 # LOAD FILES
